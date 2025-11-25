@@ -72,5 +72,32 @@ func (n *Node) auctionEnded() bool {
 }
 
 func (n *Node) StartServer() error {
-		
+	n.server = rpc.NewServer()
+	err := n.server.RegisterName("Node", n)
+	if err != nil {
+		return err
+	}
+
+	addr := fmt.Sprintf(":%d", n.Port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	n.listener = ln
+	log.Printf("[%s] listening on %s", n.ID, addr)
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				select {
+				case <-n.shutdown:
+					return 
+				default:
+					continue
+				}
+			}
+			go n.server.ServeConn(conn)
+		}
+	}
 }

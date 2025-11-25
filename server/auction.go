@@ -10,6 +10,10 @@ import (
 )
 
 
+func (n *Node) ClientBid(req *BidRequest, reply *BidReply) error{
+	
+}
+
 func runClientMode(serverAddr, clientID string, bid int, doQuery bool){
 	client, err := rpc.dial("tcp", serverAddr)
 	if err != nil {
