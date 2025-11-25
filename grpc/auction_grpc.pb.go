@@ -2,13 +2,12 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v6.33.0
-// source: auction.proto
+// source: grpc/auction.proto
 
 package grpc
 
 import (
 	context "context"
-
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -20,18 +19,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AuctionService_Bid_FullMethodName            = "/auction.AuctionService/Bid"
-	AuctionService_Result_FullMethodName         = "/auction.AuctionService/Result"
-	AuctionService_ReplicateState_FullMethodName = "/auction.AuctionService/ReplicateState"
+	AuctionService_PlaceBid_FullMethodName  = "/auction.AuctionService/PlaceBid"
+	AuctionService_GetResult_FullMethodName = "/auction.AuctionService/GetResult"
 )
 
 // AuctionServiceClient is the client API for AuctionService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Auction service definition
 type AuctionServiceClient interface {
-	Bid(ctx context.Context, in *BidRequest, opts ...grpc.CallOption) (*BidResponse, error)
-	Result(ctx context.Context, in *ResultRequest, opts ...grpc.CallOption) (*ResultResponse, error)
-	ReplicateState(ctx context.Context, in *ReplicationMsg, opts ...grpc.CallOption) (*Ack, error)
+	PlaceBid(ctx context.Context, in *Bid, opts ...grpc.CallOption) (*Ack, error)
+	GetResult(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Result, error)
 }
 
 type auctionServiceClient struct {
@@ -42,30 +41,20 @@ func NewAuctionServiceClient(cc grpc.ClientConnInterface) AuctionServiceClient {
 	return &auctionServiceClient{cc}
 }
 
-func (c *auctionServiceClient) Bid(ctx context.Context, in *BidRequest, opts ...grpc.CallOption) (*BidResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(BidResponse)
-	err := c.cc.Invoke(ctx, AuctionService_Bid_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *auctionServiceClient) Result(ctx context.Context, in *ResultRequest, opts ...grpc.CallOption) (*ResultResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResultResponse)
-	err := c.cc.Invoke(ctx, AuctionService_Result_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *auctionServiceClient) ReplicateState(ctx context.Context, in *ReplicationMsg, opts ...grpc.CallOption) (*Ack, error) {
+func (c *auctionServiceClient) PlaceBid(ctx context.Context, in *Bid, opts ...grpc.CallOption) (*Ack, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Ack)
-	err := c.cc.Invoke(ctx, AuctionService_ReplicateState_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, AuctionService_PlaceBid_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auctionServiceClient) GetResult(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Result, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Result)
+	err := c.cc.Invoke(ctx, AuctionService_GetResult_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -75,10 +64,11 @@ func (c *auctionServiceClient) ReplicateState(ctx context.Context, in *Replicati
 // AuctionServiceServer is the server API for AuctionService service.
 // All implementations must embed UnimplementedAuctionServiceServer
 // for forward compatibility.
+//
+// Auction service definition
 type AuctionServiceServer interface {
-	Bid(context.Context, *BidRequest) (*BidResponse, error)
-	Result(context.Context, *ResultRequest) (*ResultResponse, error)
-	ReplicateState(context.Context, *ReplicationMsg) (*Ack, error)
+	PlaceBid(context.Context, *Bid) (*Ack, error)
+	GetResult(context.Context, *Empty) (*Result, error)
 	mustEmbedUnimplementedAuctionServiceServer()
 }
 
@@ -89,14 +79,11 @@ type AuctionServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAuctionServiceServer struct{}
 
-func (UnimplementedAuctionServiceServer) Bid(context.Context, *BidRequest) (*BidResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Bid not implemented")
+func (UnimplementedAuctionServiceServer) PlaceBid(context.Context, *Bid) (*Ack, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PlaceBid not implemented")
 }
-func (UnimplementedAuctionServiceServer) Result(context.Context, *ResultRequest) (*ResultResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Result not implemented")
-}
-func (UnimplementedAuctionServiceServer) ReplicateState(context.Context, *ReplicationMsg) (*Ack, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReplicateState not implemented")
+func (UnimplementedAuctionServiceServer) GetResult(context.Context, *Empty) (*Result, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetResult not implemented")
 }
 func (UnimplementedAuctionServiceServer) mustEmbedUnimplementedAuctionServiceServer() {}
 func (UnimplementedAuctionServiceServer) testEmbeddedByValue()                        {}
@@ -119,56 +106,38 @@ func RegisterAuctionServiceServer(s grpc.ServiceRegistrar, srv AuctionServiceSer
 	s.RegisterService(&AuctionService_ServiceDesc, srv)
 }
 
-func _AuctionService_Bid_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BidRequest)
+func _AuctionService_PlaceBid_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Bid)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AuctionServiceServer).Bid(ctx, in)
+		return srv.(AuctionServiceServer).PlaceBid(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AuctionService_Bid_FullMethodName,
+		FullMethod: AuctionService_PlaceBid_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AuctionServiceServer).Bid(ctx, req.(*BidRequest))
+		return srv.(AuctionServiceServer).PlaceBid(ctx, req.(*Bid))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuctionService_Result_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResultRequest)
+func _AuctionService_GetResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AuctionServiceServer).Result(ctx, in)
+		return srv.(AuctionServiceServer).GetResult(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AuctionService_Result_FullMethodName,
+		FullMethod: AuctionService_GetResult_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AuctionServiceServer).Result(ctx, req.(*ResultRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AuctionService_ReplicateState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReplicationMsg)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AuctionServiceServer).ReplicateState(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AuctionService_ReplicateState_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AuctionServiceServer).ReplicateState(ctx, req.(*ReplicationMsg))
+		return srv.(AuctionServiceServer).GetResult(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -181,18 +150,14 @@ var AuctionService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*AuctionServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Bid",
-			Handler:    _AuctionService_Bid_Handler,
+			MethodName: "PlaceBid",
+			Handler:    _AuctionService_PlaceBid_Handler,
 		},
 		{
-			MethodName: "Result",
-			Handler:    _AuctionService_Result_Handler,
-		},
-		{
-			MethodName: "ReplicateState",
-			Handler:    _AuctionService_ReplicateState_Handler,
+			MethodName: "GetResult",
+			Handler:    _AuctionService_GetResult_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "auction.proto",
+	Metadata: "grpc/auction.proto",
 }

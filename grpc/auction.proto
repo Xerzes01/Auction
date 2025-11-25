@@ -2,57 +2,30 @@ syntax = "proto3";
 
 package auction;
 
-option go_package = "github.com/Xerzes01/Auction/proto";
+option go_package = "auction/grpc";
 
-// AuctionNode is the gRPC service that implements a distributed auction
-service AuctionNode {
-  // Client-facing RPCs
-  rpc ClientBid(BidRequest) returns (BidReply);
-  rpc QueryResult(QueryRequest) returns (QueryReply);
-
-  // Internal replication RPC (Primary → Backup nodes)
-  rpc Append(LogEntry) returns (AppendReply);
+// Request to place a bid
+message Bid {
+  string bidder = 1;
+  int32 amount = 2;
 }
 
-// ================================
-// Messages used by clients
-// ================================
-
-message BidRequest {
-  string bidder_id = 1;
-  int32  amount    = 2;
-  int64  client_id = 3;
-  int64  seq_num   = 4;
+// Acknowledgement message
+message Ack {
+  string message = 1;
 }
 
-message BidReply {
-  string outcome = 1;  // "success" | "failed" | "exception"
-  string reason  = 2;
+// Empty request for queries
+message Empty {}
+
+// Result of highest current bid
+message Result {
+  string bidder = 1;
+  int32 amount = 2;
 }
 
-message QueryRequest {
-  // Empty request – just checking current state
-}
-
-message QueryReply {
-  bool   auction_ended   = 1;
-  int32  highest_amount  = 2;
-  string highest_bidder  = 3;
-  string message         = 4;
-}
-
-// ================================
-// Messages used for replication (Raft-style log entries)
-// ================================
-
-message LogEntry {
-  string bidder_id = 1;
-  int32  amount    = 2;
-  int64  client_id = 3;
-  int64  seq_num   = 4;
-}
-
-message AppendReply {
-  bool   success = 1;
-  string error   = 2;
+// Auction service definition
+service AuctionService {
+  rpc PlaceBid(Bid) returns (Ack);
+  rpc GetResult(Empty) returns (Result);
 }
