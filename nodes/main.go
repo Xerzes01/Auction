@@ -14,9 +14,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// AuctionNode represents a node in a distributed auction system
 type AuctionNode struct {
-	auction.UnimplementedAuctionServiceServer // Embed for forward compatibility
+	auction.UnimplementedAuctionServiceServer 
 
 	mu            sync.RWMutex
 	nodeID        string
