@@ -2,13 +2,12 @@ syntax = "proto3";
 
 package auction;
 
-option go_package = "auction/grpc";
+option go_package = "github.com/Xerzes01/Auction/grpc;auction";
 
 // Request to place a bid
 message Bid {
   string bidder = 1;
   int32 amount = 2;
-  bool replicate = 3; // internal flag used by nodes when replicating
 }
 
 // Acknowledgement message

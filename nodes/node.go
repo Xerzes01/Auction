@@ -13,31 +13,27 @@ import (
 	"google.golang.org/grpc"
 )
 
-// AuctionNode implements the AuctionService
 type AuctionNode struct {
 	pb.UnimplementedAuctionServiceServer
 
 	ID        int
 	Port      int
 	Peers     []string
-	Mutex     sync.Mutex
 	Highest   int32
 	Bidder    string
 	StartTime time.Time
-	Duration  time.Duration // auction duration from start
-
-	// optional: dial timeout for RPCs to peers
-	RPCTimeout time.Duration
+	Duration  time.Duration
+	Ended     bool
+	Mutex     sync.Mutex
 }
 
 func NewAuctionNode(id int, port int, peers []string) *AuctionNode {
 	return &AuctionNode{
-		ID:         id,
-		Port:       port,
-		Peers:      peers,
-		StartTime:  time.Now(),
-		Duration:   time.Second * 100, // default 100s auction length (changeable)
-		RPCTimeout: time.Second * 1,
+		ID:        id,
+		Port:      port,
+		Peers:     peers,
+		StartTime: time.Now(),
+		Duration:  time.Second * 100, // Auction duration
 	}
 }
 
@@ -45,15 +41,7 @@ func ParsePeers(peers string) []string {
 	if peers == "" {
 		return []string{}
 	}
-	parts := strings.Split(peers, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
+	return strings.Split(peers, ",")
 }
 
 func (n *AuctionNode) Start() {
@@ -70,111 +58,53 @@ func (n *AuctionNode) Start() {
 	if len(n.Peers) > 0 {
 		log.Printf("Peers: %v", n.Peers)
 	}
-	log.Printf("Auction started at %s for duration %s", n.StartTime.Format(time.RFC3339), n.Duration)
+
+	// Goroutine to end auction automatically
+	go func() {
+		time.Sleep(n.Duration)
+		n.Mutex.Lock()
+		n.Ended = true
+		n.Mutex.Unlock()
+		log.Println("Auction ended")
+	}()
 
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }
 
-// PlaceBid handles both client bids (replicate==false) and replicated requests (replicate==true).
-// For client-originated bids we attempt to replicate to peers and only commit locally once a majority acknowledges.
 func (n *AuctionNode) PlaceBid(ctx context.Context, bid *pb.Bid) (*pb.Ack, error) {
-	// Check if auction ended
-	if n.isAuctionEnded() {
+	n.Mutex.Lock()
+	defer n.Mutex.Unlock()
+
+	if n.Ended || time.Since(n.StartTime) > n.Duration {
+		n.Ended = true
 		return &pb.Ack{Message: "Auction has ended"}, nil
 	}
 
-	// Validate local condition: new bid must be greater than local highest.
-	n.Mutex.Lock()
-	localHighest := n.Highest
-	n.Mutex.Unlock()
-
-	if bid.Amount <= localHighest {
+	if bid.Amount <= n.Highest {
 		return &pb.Ack{Message: "Bid too low"}, nil
 	}
 
-	// If this is a replication request (from another node), just update local state (no further replication)
-	if bid.Replicate {
-		n.Mutex.Lock()
-		// Only accept if still higher than local value (concurrent updates may have advanced)
-		if bid.Amount > n.Highest {
-			n.Highest = bid.Amount
-			n.Bidder = bid.Bidder
-		}
-		n.Mutex.Unlock()
-		return &pb.Ack{Message: "Replicated"}, nil
+	// Tentatively accept bid
+	n.Highest = bid.Amount
+	n.Bidder = bid.Bidder
+
+	success := n.ReplicateBid(bid)
+	if !success {
+		return &pb.Ack{Message: "Bid failed replication"}, nil
 	}
 
-	// Otherwise: client-originated bid -> replicate to peers and commit if quorum reached.
-	totalNodes := len(n.Peers) + 1
-	quorum := totalNodes/2 + 1
-
-	var wg sync.WaitGroup
-	successCh := make(chan struct{}, len(n.Peers))
-	// replicate to each peer concurrently
-	for _, peerAddr := range n.Peers {
-		wg.Add(1)
-		go func(addr string) {
-			defer wg.Done()
-			conn, client, err := ConnectToNode(addr, n.RPCTimeout)
-			if err != nil {
-				return
-			}
-			// ensure connection closed immediately after use
-			defer conn.Close()
-
-			ctx, cancel := context.WithTimeout(context.Background(), n.RPCTimeout)
-			defer cancel()
-
-			// send replication request (replicate = true)
-			rep := &pb.Bid{
-				Bidder:    bid.Bidder,
-				Amount:    bid.Amount,
-				Replicate: true,
-			}
-			_, err = client.PlaceBid(ctx, rep)
-			if err == nil {
-				// peer accepted replication
-				select {
-				case successCh <- struct{}{}:
-				default:
-				}
-			}
-		}(peerAddr)
-	}
-
-	// Wait for all replication RPC goroutines to finish (but we can also short-circuit)
-	// We'll collect successes while waiting, but to keep simple, wait and then count.
-	wg.Wait()
-	close(successCh)
-
-	successes := 0
-	for range successCh {
-		successes++
-	}
-	// include this node's acceptance as 1
-	successesIncludingSelf := successes + 1
-
-	if successesIncludingSelf >= quorum {
-		// commit locally
-		n.Mutex.Lock()
-		// double-check (concurrent accepted higher bid?) - if concurrent higher exists, we must compare
-		if bid.Amount > n.Highest {
-			n.Highest = bid.Amount
-			n.Bidder = bid.Bidder
-		}
-		n.Mutex.Unlock()
-		return &pb.Ack{Message: "Bid accepted!"}, nil
-	}
-
-	// Not enough nodes accepted -> fail
-	return &pb.Ack{Message: "Failed to reach quorum; bid not accepted"}, nil
+	return &pb.Ack{Message: "Bid accepted!"}, nil
 }
 
 func (n *AuctionNode) GetResult(ctx context.Context, _ *pb.Empty) (*pb.Result, error) {
 	n.Mutex.Lock()
 	defer n.Mutex.Unlock()
+
+	if time.Since(n.StartTime) >= n.Duration {
+		n.Ended = true
+	}
 
 	return &pb.Result{
 		Amount: n.Highest,
@@ -182,20 +112,38 @@ func (n *AuctionNode) GetResult(ctx context.Context, _ *pb.Empty) (*pb.Result, e
 	}, nil
 }
 
-func (n *AuctionNode) isAuctionEnded() bool {
-	return time.Since(n.StartTime) >= n.Duration
+// ReplicateBid sends the bid to peers and waits for majority success
+func (n *AuctionNode) ReplicateBid(bid *pb.Bid) bool {
+	successCount := 1 // count self
+
+	for _, peer := range n.Peers {
+		conn, client := ConnectToNode(peer)
+		if conn == nil {
+			continue
+		}
+		defer conn.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ack, err := client.PlaceBid(ctx, bid)
+		cancel()
+		if err == nil && ack.Message == "Bid accepted!" {
+			successCount++
+		}
+	}
+
+	// Majority quorum
+	if successCount >= (len(n.Peers)+1)/2+1 {
+		return true
+	}
+	return false
 }
 
-// ConnectToNode dials a peer and returns the connection and client. Caller must close conn.
-// Uses a timeout to avoid indefinite hangs.
-func ConnectToNode(addr string, timeout time.Duration) (*grpc.ClientConn, pb.AuctionServiceClient, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
+func ConnectToNode(addr string) (*grpc.ClientConn, pb.AuctionServiceClient) {
+	conn, err := grpc.Dial(addr, grpc.WithInsecure())
 	if err != nil {
-		return nil, nil, err
+		log.Println("Failed to connect to", addr, err)
+		return nil, nil
 	}
 	client := pb.NewAuctionServiceClient(conn)
-	return conn, client, nil
+	return conn, client
 }

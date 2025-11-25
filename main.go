@@ -22,21 +22,17 @@ func main() {
 	clientID := flag.String("clientid", "", "Client name")
 	bidAmount := flag.Int("bid", 0, "Bid amount")
 	query := flag.Bool("query", false, "Query winning bid")
-	auctionDuration := flag.Int("duration", 100, "Auction duration in seconds (only for node mode)")
 
 	flag.Parse()
 
 	if *mode == "node" {
 		peerList := nodes.ParsePeers(*peers)
 		node := nodes.NewAuctionNode(*id, *port, peerList)
-		node.Duration = time.Duration(*auctionDuration) * time.Second
 		node.Start()
 	} else if *mode == "client" {
-		// dial server (client)
-		conn, client, err := nodes.ConnectToNode(*serverAddr, time.Second*2)
-		if err != nil {
-			log.Println("Failed to connect to server:", err)
-			return
+		conn, client := nodes.ConnectToNode(*serverAddr)
+		if conn == nil {
+			log.Fatal("Failed to connect to server")
 		}
 		defer conn.Close()
 
@@ -58,12 +54,10 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Place a bid (replicate flag left default false)
-		b := &pb.Bid{
+		res, err := client.PlaceBid(ctx, &pb.Bid{
 			Bidder: *clientID,
 			Amount: int32(*bidAmount),
-		}
-		res, err := client.PlaceBid(ctx, b)
+		})
 		if err != nil {
 			log.Println("Bid failed:", err)
 			return
