@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"auction/nodes"
+	"github.com/Xerzes01/Auction/nodes"
 	pb "github.com/Xerzes01/Auction/grpc"
 )
 

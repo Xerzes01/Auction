@@ -1,9 +1,8 @@
-module auction
+module github.com/Xerzes01/Auction
 
 go 1.25.3
 
 require (
-	github.com/Xerzes01/Auction v0.0.0-20251125140126-363e222c1690
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.10
 )
