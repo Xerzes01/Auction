@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+package auction;
+
+option go_package = "github.com/Xerzes01/Auction/grpc;auction";
+
