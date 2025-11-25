@@ -8,6 +8,7 @@ option go_package = "auction/grpc";
 message Bid {
   string bidder = 1;
   int32 amount = 2;
+  bool replicate = 3; // internal flag used by nodes when replicating
 }
 
 // Acknowledgement message
