@@ -1,11 +1,11 @@
 # Start-up
-Terminal 1
+Terminal 1:
 go run main.go -mode=node -id=1 -port=8001 -peers=localhost:8002,localhost:8003
 
-Terminal 2
+Terminal 2:
 go run main.go -mode=node -id=2 -port=8002 -peers=localhost:8001,localhost:8003
 
-Terminal 3
+Terminal 3:
 go run main.go -mode=node -id=3 -port=8003 -peers=localhost:8001,localhost:8002
 
 
