@@ -1,4 +1,4 @@
-#Start up
+#Start-up
 Terminal 1
 go run main.go -mode=node -id=1 -port=8001 -peers=localhost:8002,localhost:8003
 
