@@ -1,150 +1,262 @@
 package nodes
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	pb "github.com/Xerzes01/Auction/grpc"
-
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-type AuctionNode struct {
+const (
+	AuctionDuration = 100 * time.Second
+	QuorumSize      = 2
+)
+
+type Phase int
+
+const (
+	Ongoing Phase = iota
+	Closed
+)
+
+type Node struct {
 	pb.UnimplementedAuctionServiceServer
 
-	ID        int
-	Port      int
-	Peers     []string
-	Highest   int32
-	Bidder    string
-	StartTime time.Time
-	Duration  time.Duration
-	Ended     bool
-	Mutex     sync.Mutex
+	id         int
+	port       string
+	selfAddr   string
+	peers      []string 
+
+	mu           sync.RWMutex
+	phase        Phase
+	startTime    time.Time
+	highestBid   int32
+	highestBidBy string
 }
 
-func NewAuctionNode(id int, port int, peers []string) *AuctionNode {
-	return &AuctionNode{
-		ID:        id,
-		Port:      port,
-		Peers:     peers,
-		StartTime: time.Now(),
-		Duration:  time.Second * 100, // Auction duration
+func NewNode(id int, port string, peers []string) *Node {
+	selfAddr := "localhost:" + port
+
+	n := &Node{
+		id:         id,
+		port:       port,
+		selfAddr:   selfAddr,
+		peers:      peers,
+		phase:      Ongoing,
+		startTime:  time.Now(),
+		highestBid: 0,
 	}
+
+	go n.auctionTimer()
+
+	return n
 }
 
-func ParsePeers(peers string) []string {
-	if peers == "" {
-		return []string{}
+func (n *Node) auctionTimer() {
+	<-time.After(AuctionDuration)
+
+	n.mu.Lock()
+	if n.phase == Ongoing {
+		n.phase = Closed
+		log.Printf("[Node %d] === AUCTION CLOSED === Winner: %s ($%d)", n.id, n.highestBidBy, n.highestBid)
 	}
-	return strings.Split(peers, ",")
+	n.mu.Unlock()
 }
 
-func (n *AuctionNode) Start() {
-	addr := fmt.Sprintf(":%d", n.Port)
-	lis, err := net.Listen("tcp", addr)
+func (n *Node) StartGRPCServer() {
+	lis, err := net.Listen("tcp", ":"+n.port)
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		log.Fatalf("Node %d failed to listen on port %s: %v", n.id, n.port, err)
 	}
 
-	grpcServer := grpc.NewServer()
-	pb.RegisterAuctionServiceServer(grpcServer, n)
+	s := grpc.NewServer()
+	pb.RegisterAuctionServiceServer(s, n)
 
-	log.Printf("Auction node %d running on %s", n.ID, addr)
-	if len(n.Peers) > 0 {
-		log.Printf("Peers: %v", n.Peers)
-	}
-
-	// Goroutine to end auction automatically
-	go func() {
-		time.Sleep(n.Duration)
-		n.Mutex.Lock()
-		n.Ended = true
-		n.Mutex.Unlock()
-		log.Println("Auction ended")
-	}()
-
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("Server error: %v", err)
+	log.Printf("Node %d running on %s | Peers: %v", n.id, n.selfAddr, n.peers)
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("Node %d failed: %v", n.id, err)
 	}
 }
 
-func (n *AuctionNode) PlaceBid(ctx context.Context, bid *pb.Bid) (*pb.Ack, error) {
-	n.Mutex.Lock()
-	defer n.Mutex.Unlock()
-
-	if n.Ended || time.Since(n.StartTime) > n.Duration {
-		n.Ended = true
-		return &pb.Ack{Message: "Auction has ended"}, nil
+func (n *Node) PlaceBid(ctx context.Context, bid *pb.Bid) (*pb.Ack, error) {
+	n.mu.RLock()
+	if n.phase == Closed {
+		n.mu.RUnlock()
+		return &pb.Ack{Message: "fail"}, nil
+	}
+	if bid.Amount <= n.highestBid {
+		n.mu.RUnlock()
+		return &pb.Ack{Message: "fail: bids must be greater than the greatest bid"}, nil
+	}
+	n.mu.RUnlock()
+	
+	if !n.commitBidWithQuorum(bid) {
+		return nil, status.Error(codes.Unavailable, "quorum not reached")
 	}
 
-	if bid.Amount <= n.Highest {
-		return &pb.Ack{Message: "Bid too low"}, nil
-	}
-
-	// Tentatively accept bid
-	n.Highest = bid.Amount
-	n.Bidder = bid.Bidder
-
-	success := n.ReplicateBid(bid)
-	if !success {
-		return &pb.Ack{Message: "Bid failed replication"}, nil
-	}
-
-	return &pb.Ack{Message: "Bid accepted!"}, nil
+	return &pb.Ack{Message: "success"}, nil
 }
 
-func (n *AuctionNode) GetResult(ctx context.Context, _ *pb.Empty) (*pb.Result, error) {
-	n.Mutex.Lock()
-	defer n.Mutex.Unlock()
+func (n *Node) commitBidWithQuorum(bid *pb.Bid) bool {
+	var wg sync.WaitGroup
+	success := make(chan bool, len(n.peers)+1)
+	successCount := 0
+	n.mu.Lock()
+	if bid.Amount > n.highestBid {
+		n.highestBid = bid.Amount
+		n.highestBidBy = bid.Bidder
+		log.Printf("[Node %d] Accepted bid: %d by %s", n.id, bid.Amount, bid.Bidder)
+	}
+	n.mu.Unlock()
+	successCount++
+	success <- true
 
-	if time.Since(n.StartTime) >= n.Duration {
-		n.Ended = true
+	for _, peer := range n.peers {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithTimeout(2*time.Second))
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			client := pb.NewAuctionServiceClient(conn)
+			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			defer cancel()
+
+			resp, err := client.PlaceBid(ctx, bid)
+			if err == nil && resp != nil && resp.Message == "success" {
+				success <- true
+			}
+		}(peer)
 	}
 
+	timeout := time.After(3 * time.Second)
+	for successCount < QuorumSize {
+		select {
+		case <-success:
+			successCount++
+		case <-timeout:
+			log.Printf("[Node %d] Quorum timeout for bid %d", n.id, bid.Amount)
+			wg.Wait()
+			return false
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	wg.Wait()
+	close(success)
+	return true
+}
+
+func (n *Node) GetResult(ctx context.Context, _ *pb.Empty) (*pb.Result, error) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	if n.highestBid == 0 {
+		return &pb.Result{Bidder: "nobody", Amount: 0}, nil
+	}
 	return &pb.Result{
-		Amount: n.Highest,
-		Bidder: n.Bidder,
+		Bidder: n.highestBidBy,
+		Amount: n.highestBid,
 	}, nil
 }
 
-// ReplicateBid sends the bid to peers and waits for majority success
-func (n *AuctionNode) ReplicateBid(bid *pb.Bid) bool {
-	successCount := 1 // count self
+func (n *Node) StartConsole() {
+	scanner := bufio.NewScanner(os.Stdin)
+	bidderName := fmt.Sprintf("Node%d", n.id)
 
-	for _, peer := range n.Peers {
-		conn, client := ConnectToNode(peer)
-		if conn == nil {
+	for {
+		fmt.Printf("[Node %d] > ", n.id)
+		if !scanner.Scan() {
+			break
+		}
+		input := strings.TrimSpace(scanner.Text())
+		if input == "" {
 			continue
 		}
-		defer conn.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		ack, err := client.PlaceBid(ctx, bid)
-		cancel()
-		if err == nil && ack.Message == "Bid accepted!" {
-			successCount++
+		parts := strings.SplitN(input, " ", 2)
+		cmd := parts[0]
+
+		switch cmd {
+		case "bid":
+			if len(parts) < 2 {
+				fmt.Println("Usage: bid <amount>")
+				continue
+			}
+			amount, err := strconv.Atoi(parts[1])
+			if err != nil {
+				fmt.Println("Invalid amount")
+				continue
+			}
+
+			conn, err := grpc.Dial(n.selfAddr, grpc.WithInsecure())
+			if err != nil {
+				fmt.Println("Cannot connect to self")
+				continue
+			}
+			client := pb.NewAuctionServiceClient(conn)
+
+			resp, err := client.PlaceBid(context.Background(), &pb.Bid{
+				Bidder: bidderName,
+				Amount: int32(amount),
+			})
+
+			conn.Close()
+
+			if err != nil {
+				fmt.Printf("exception: %v\n", err)
+			} else {
+				fmt.Println("→", resp.Message)
+			}
+
+		case "result", "query":
+			conn, err := grpc.Dial(n.selfAddr, grpc.WithInsecure())
+			if err != nil {
+				fmt.Println("Cannot query")
+				continue
+			}
+			client := pb.NewAuctionServiceClient(conn)
+			res, err := client.GetResult(context.Background(), &pb.Empty{})
+			conn.Close()
+
+			if err != nil {
+				fmt.Println("exception:", err)
+			} else if res.Bidder == "nobody" {
+				fmt.Println("No bids yet")
+			} else {
+				closed := " (auction ongoing)"
+				n.mu.RLock()
+				if n.phase == Closed {
+					closed = " ← AUCTION CLOSED!"
+				}
+				n.mu.RUnlock()
+				fmt.Printf("Highest bid: %d by %s%s\n", res.Amount, res.Bidder, closed)
+			}
+
+		case "help":
+			fmt.Println("Commands: bid <amount> | result | help | exit")
+
+		case "exit":
+			fmt.Println("Bye!")
+			os.Exit(0)
+
+		default:
+			fmt.Println("Unknown command")
 		}
 	}
-
-	// Majority quorum
-	if successCount >= (len(n.Peers)+1)/2+1 {
-		return true
-	}
-	return false
-}
-
-func ConnectToNode(addr string) (*grpc.ClientConn, pb.AuctionServiceClient) {
-	conn, err := grpc.Dial(addr, grpc.WithInsecure())
-	if err != nil {
-		log.Println("Failed to connect to", addr, err)
-		return nil, nil
-	}
-	client := pb.NewAuctionServiceClient(conn)
-	return conn, client
 }
