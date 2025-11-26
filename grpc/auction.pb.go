@@ -222,9 +222,10 @@ const file_grpc_auction_proto_rawDesc = "" +
 	"\x05Empty\"8\n" +
 	"\x06Result\x12\x16\n" +
 	"\x06bidder\x18\x01 \x01(\tR\x06bidder\x12\x16\n" +
-	"\x06amount\x18\x02 \x01(\x05R\x06amount2f\n" +
+	"\x06amount\x18\x02 \x01(\x05R\x06amount2\x92\x01\n" +
 	"\x0eAuctionService\x12&\n" +
-	"\bPlaceBid\x12\f.auction.Bid\x1a\f.auction.Ack\x12,\n" +
+	"\bPlaceBid\x12\f.auction.Bid\x1a\f.auction.Ack\x12*\n" +
+	"\fPropagateBid\x12\f.auction.Bid\x1a\f.auction.Ack\x12,\n" +
 	"\tGetResult\x12\x0e.auction.Empty\x1a\x0f.auction.ResultB*Z(github.com/Xerzes01/Auction/grpc;auctionb\x06proto3"
 
 var (
@@ -248,11 +249,13 @@ var file_grpc_auction_proto_goTypes = []any{
 }
 var file_grpc_auction_proto_depIdxs = []int32{
 	0, // 0: auction.AuctionService.PlaceBid:input_type -> auction.Bid
-	2, // 1: auction.AuctionService.GetResult:input_type -> auction.Empty
-	1, // 2: auction.AuctionService.PlaceBid:output_type -> auction.Ack
-	3, // 3: auction.AuctionService.GetResult:output_type -> auction.Result
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
+	0, // 1: auction.AuctionService.PropagateBid:input_type -> auction.Bid
+	2, // 2: auction.AuctionService.GetResult:input_type -> auction.Empty
+	1, // 3: auction.AuctionService.PlaceBid:output_type -> auction.Ack
+	1, // 4: auction.AuctionService.PropagateBid:output_type -> auction.Ack
+	3, // 5: auction.AuctionService.GetResult:output_type -> auction.Result
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name

@@ -33,10 +33,10 @@ const (
 type Node struct {
 	pb.UnimplementedAuctionServiceServer
 
-	id         int
-	port       string
-	selfAddr   string
-	peers      []string 
+	id       int
+	port     string
+	selfAddr string
+	peers    []string
 
 	mu           sync.RWMutex
 	phase        Phase
@@ -65,7 +65,6 @@ func NewNode(id int, port string, peers []string) *Node {
 
 func (n *Node) auctionTimer() {
 	<-time.After(AuctionDuration)
-
 	n.mu.Lock()
 	if n.phase == Ongoing {
 		n.phase = Closed
@@ -89,18 +88,17 @@ func (n *Node) StartGRPCServer() {
 	}
 }
 
+// -------------------- RPCs --------------------
+
 func (n *Node) PlaceBid(ctx context.Context, bid *pb.Bid) (*pb.Ack, error) {
 	n.mu.RLock()
 	if n.phase == Closed {
 		n.mu.RUnlock()
-		return &pb.Ack{Message: "fail"}, nil
-	}
-	if bid.Amount <= n.highestBid {
-		n.mu.RUnlock()
-		return &pb.Ack{Message: "fail: bids must be greater than the greatest bid"}, nil
+		return &pb.Ack{Message: "fail: auction closed"}, nil
 	}
 	n.mu.RUnlock()
-	
+
+	// Try to commit bid locally and propagate to peers
 	if !n.commitBidWithQuorum(bid) {
 		return nil, status.Error(codes.Unavailable, "quorum not reached")
 	}
@@ -108,58 +106,18 @@ func (n *Node) PlaceBid(ctx context.Context, bid *pb.Bid) (*pb.Ack, error) {
 	return &pb.Ack{Message: "success"}, nil
 }
 
-func (n *Node) commitBidWithQuorum(bid *pb.Bid) bool {
-	var wg sync.WaitGroup
-	success := make(chan bool, len(n.peers)+1)
-	successCount := 0
+// This is called by peers for propagation, no quorum check
+func (n *Node) PropagateBid(ctx context.Context, bid *pb.Bid) (*pb.Ack, error) {
 	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	if bid.Amount > n.highestBid {
 		n.highestBid = bid.Amount
 		n.highestBidBy = bid.Bidder
-		log.Printf("[Node %d] Accepted bid: %d by %s", n.id, bid.Amount, bid.Bidder)
-	}
-	n.mu.Unlock()
-	successCount++
-	success <- true
-
-	for _, peer := range n.peers {
-		wg.Add(1)
-		go func(addr string) {
-			defer wg.Done()
-			conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithTimeout(2*time.Second))
-			if err != nil {
-				return
-			}
-			defer conn.Close()
-
-			client := pb.NewAuctionServiceClient(conn)
-			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-			defer cancel()
-
-			resp, err := client.PlaceBid(ctx, bid)
-			if err == nil && resp != nil && resp.Message == "success" {
-				success <- true
-			}
-		}(peer)
+		log.Printf("[Node %d] Propagated bid accepted: %d by %s", n.id, bid.Amount, bid.Bidder)
 	}
 
-	timeout := time.After(3 * time.Second)
-	for successCount < QuorumSize {
-		select {
-		case <-success:
-			successCount++
-		case <-timeout:
-			log.Printf("[Node %d] Quorum timeout for bid %d", n.id, bid.Amount)
-			wg.Wait()
-			return false
-		default:
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-
-	wg.Wait()
-	close(success)
-	return true
+	return &pb.Ack{Message: "success"}, nil
 }
 
 func (n *Node) GetResult(ctx context.Context, _ *pb.Empty) (*pb.Result, error) {
@@ -174,6 +132,63 @@ func (n *Node) GetResult(ctx context.Context, _ *pb.Empty) (*pb.Result, error) {
 		Amount: n.highestBid,
 	}, nil
 }
+
+// -------------------- Bid Commit --------------------
+
+func (n *Node) commitBidWithQuorum(bid *pb.Bid) bool {
+	var wg sync.WaitGroup
+	success := make(chan bool, len(n.peers)+1)
+
+	// Commit locally
+	n.mu.Lock()
+	if bid.Amount > n.highestBid {
+		n.highestBid = bid.Amount
+		n.highestBidBy = bid.Bidder
+		log.Printf("[Node %d] Accepted bid: %d by %s", n.id, bid.Amount, bid.Bidder)
+	}
+	n.mu.Unlock()
+	success <- true
+
+	// Propagate to peers
+	for _, peer := range n.peers {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			client := pb.NewAuctionServiceClient(conn)
+			resp, err := client.PropagateBid(ctx, bid)
+			if err == nil && resp != nil && resp.Message == "success" {
+				success <- true
+			}
+		}(peer)
+	}
+
+	successCount := 0
+	timeout := time.After(3 * time.Second)
+
+	for successCount < QuorumSize {
+		select {
+		case <-success:
+			successCount++
+		case <-timeout:
+			log.Printf("[Node %d] Quorum timeout for bid %d", n.id, bid.Amount)
+			wg.Wait()
+			return false
+		}
+	}
+
+	wg.Wait()
+	return true
+}
+
+// -------------------- Console --------------------
 
 func (n *Node) StartConsole() {
 	scanner := bufio.NewScanner(os.Stdin)
@@ -210,12 +225,10 @@ func (n *Node) StartConsole() {
 				continue
 			}
 			client := pb.NewAuctionServiceClient(conn)
-
 			resp, err := client.PlaceBid(context.Background(), &pb.Bid{
 				Bidder: bidderName,
 				Amount: int32(amount),
 			})
-
 			conn.Close()
 
 			if err != nil {

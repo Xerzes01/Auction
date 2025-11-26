@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AuctionService_PlaceBid_FullMethodName  = "/auction.AuctionService/PlaceBid"
-	AuctionService_GetResult_FullMethodName = "/auction.AuctionService/GetResult"
+	AuctionService_PlaceBid_FullMethodName     = "/auction.AuctionService/PlaceBid"
+	AuctionService_PropagateBid_FullMethodName = "/auction.AuctionService/PropagateBid"
+	AuctionService_GetResult_FullMethodName    = "/auction.AuctionService/GetResult"
 )
 
 // AuctionServiceClient is the client API for AuctionService service.
@@ -30,6 +31,7 @@ const (
 // Auction service definition
 type AuctionServiceClient interface {
 	PlaceBid(ctx context.Context, in *Bid, opts ...grpc.CallOption) (*Ack, error)
+	PropagateBid(ctx context.Context, in *Bid, opts ...grpc.CallOption) (*Ack, error)
 	GetResult(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Result, error)
 }
 
@@ -45,6 +47,16 @@ func (c *auctionServiceClient) PlaceBid(ctx context.Context, in *Bid, opts ...gr
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Ack)
 	err := c.cc.Invoke(ctx, AuctionService_PlaceBid_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auctionServiceClient) PropagateBid(ctx context.Context, in *Bid, opts ...grpc.CallOption) (*Ack, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Ack)
+	err := c.cc.Invoke(ctx, AuctionService_PropagateBid_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +80,7 @@ func (c *auctionServiceClient) GetResult(ctx context.Context, in *Empty, opts ..
 // Auction service definition
 type AuctionServiceServer interface {
 	PlaceBid(context.Context, *Bid) (*Ack, error)
+	PropagateBid(context.Context, *Bid) (*Ack, error)
 	GetResult(context.Context, *Empty) (*Result, error)
 	mustEmbedUnimplementedAuctionServiceServer()
 }
@@ -81,6 +94,9 @@ type UnimplementedAuctionServiceServer struct{}
 
 func (UnimplementedAuctionServiceServer) PlaceBid(context.Context, *Bid) (*Ack, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PlaceBid not implemented")
+}
+func (UnimplementedAuctionServiceServer) PropagateBid(context.Context, *Bid) (*Ack, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PropagateBid not implemented")
 }
 func (UnimplementedAuctionServiceServer) GetResult(context.Context, *Empty) (*Result, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetResult not implemented")
@@ -124,6 +140,24 @@ func _AuctionService_PlaceBid_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuctionService_PropagateBid_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Bid)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuctionServiceServer).PropagateBid(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuctionService_PropagateBid_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuctionServiceServer).PropagateBid(ctx, req.(*Bid))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuctionService_GetResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -152,6 +186,10 @@ var AuctionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PlaceBid",
 			Handler:    _AuctionService_PlaceBid_Handler,
+		},
+		{
+			MethodName: "PropagateBid",
+			Handler:    _AuctionService_PropagateBid_Handler,
 		},
 		{
 			MethodName: "GetResult",

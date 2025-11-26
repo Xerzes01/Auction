@@ -1,11 +1,12 @@
 package main
 
 import (
-	"github.com/Xerzes01/Auction/nodes"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/Xerzes01/Auction/nodes"
 )
 
 func main() {
@@ -30,7 +31,8 @@ func main() {
 		node := nodes.NewNode(*nodeID, *port, peers)
 
 		go node.StartGRPCServer()
-		node.StartConsole()      
+		node.StartConsole()
+
 	default:
 		fmt.Println("Unknown or missing mode. Usage:")
 		fmt.Println("go run main.go -mode=node -id=1 -port=8001 -peers=host:port,host:port")

@@ -26,6 +26,7 @@ message Result {
 
 // Auction service definition
 service AuctionService {
-  rpc PlaceBid(Bid) returns (Ack);
+  rpc PlaceBid(Bid) returns (Ack);         // Called by clients
+  rpc PropagateBid(Bid) returns (Ack);     // Internal replication
   rpc GetResult(Empty) returns (Result);
 }
